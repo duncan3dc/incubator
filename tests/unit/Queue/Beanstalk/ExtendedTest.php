@@ -133,45 +133,23 @@ class ExtendedTest extends Test
             'test-tube-2' => '2',
         ];
 
-        // Check if we are using Fork1.0 (php < 7)
-        if (class_exists('duncan3dc\Helpers\Fork')) {
-            $fork = new \duncan3dc\Helpers\Fork;
-        } else {
-            $fork = new \duncan3dc\Forker\Fork;
+        foreach ($expected as $tube => $value) {
+            $this->client->addWorker($tube, function (Job $job) {
+                // Store string "test-tube-%JOB_BODY%" in a shared memory
+                $memory  = shmop_open($this->shmKey, 'c', 0644, $this->shmLimit);
+                $output  = trim(shmop_read($memory, 0, $this->shmLimit));
+                $output .= sprintf("\ntest-tube-%s", $job->getBody());
+
+                shmop_write($memory, $output, 0);
+                shmop_close($memory);
+
+                throw new \RuntimeException('Forced exception to stop worker');
+            });
+
+            $this->assertNotEquals(false, $this->client->putInTube($tube, $value));
         }
 
-        $that = $this;
-
-        $fork->call(function () use ($expected, $that) {
-            foreach ($expected as $tube => $value) {
-                $that->client->addWorker($tube, function (Job $job) {
-                    // Store string "test-tube-%JOB_BODY%" in a shared memory
-                    $memory  = shmop_open($this->shmKey, 'c', 0644, $this->shmLimit);
-                    $output  = trim(shmop_read($memory, 0, $this->shmLimit));
-                    $output .= sprintf("\ntest-tube-%s", $job->getBody());
-
-                    shmop_write($memory, $output, 0);
-                    shmop_close($memory);
-
-                    throw new \RuntimeException('Forced exception to stop worker');
-                });
-
-                $that->assertNotEquals(false, $that->client->putInTube($tube, $value));
-            }
-
-            $that->client->doWork();
-
-            exit(0);
-        });
-
-        $reflectionFork    = new \ReflectionClass($fork);
-        $reflectionThreads = $reflectionFork->getProperty('threads');
-        $reflectionThreads->setAccessible(true);
-
-        sleep(2);
-
-        $reflectionThreads->setValue($fork, []);
-        unset($fork);
+        $this->client->doWork();
 
         $memory = shmop_open($this->shmKey, 'a', 0, 0);
         $output = shmop_read($memory, 0, $this->shmLimit);
